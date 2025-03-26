@@ -17,8 +17,10 @@ import android.widget.TextView
 import android.widget.Toast
 import java.nio.ByteBuffer
 
-// https://docs.unity3d.com/2022.3/Documentation/Manual/android-custom-activity.html
-
+/*!
+    https://docs.unity3d.com/2022.3/Documentation/Manual/android-custom-activity.html
+    https://docs.unity3d.com/2022.3/Documentation/Manual/android-plugins-java-code-from-c-sharp.html
+ */
 class UsbSerialActivity : Activity() {
     private var usbManager: UsbManager? = null
     private var usbDevice: UsbDevice? = null
