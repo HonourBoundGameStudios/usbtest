@@ -8,6 +8,7 @@ import android.content.IntentFilter
 import android.hardware.usb.UsbDevice
 import android.hardware.usb.UsbDeviceConnection
 import android.hardware.usb.UsbManager
+import android.os.Build
 import android.os.Bundle
 import android.util.Log
 import android.view.View
@@ -15,6 +16,8 @@ import android.widget.Button
 import android.widget.TextView
 import android.widget.Toast
 import java.nio.ByteBuffer
+
+// https://docs.unity3d.com/2022.3/Documentation/Manual/android-custom-activity.html
 
 class UsbSerialActivity : Activity() {
     private var usbManager: UsbManager? = null
@@ -25,28 +28,56 @@ class UsbSerialActivity : Activity() {
     private val usbReceiver: BroadcastReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
             val action = intent.action
+            Log.d(TAG, "Received USB action: $action")
+
             if (ACTION_USB_PERMISSION == action) {
                 synchronized(this) {
-                    val device = intent.getParcelableExtra<UsbDevice>(UsbManager.EXTRA_DEVICE)
-                    if (intent.getBooleanExtra(UsbManager.EXTRA_PERMISSION_GRANTED, false)) {
+                    // Updated way to get Parcelable extras
+                    val device = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                        intent.getParcelableExtra(UsbManager.EXTRA_DEVICE, UsbDevice::class.java)
+                    } else {
+                        @Suppress("DEPRECATION")
+                        intent.getParcelableExtra(UsbManager.EXTRA_DEVICE) as UsbDevice?
+                    }
+
+                    val permissionGranted = intent.getBooleanExtra(UsbManager.EXTRA_PERMISSION_GRANTED, false)
+                    Log.d(TAG, "Permission result: ${if (permissionGranted) "GRANTED" else "DENIED"} for device: ${device?.deviceName}")
+
+                    if (permissionGranted) {
                         if (device != null) {
+                            Log.d(TAG, "Connecting to device: ${device.deviceName}, vendorId: ${device.vendorId}, productId: ${device.productId}")
                             connectToDevice(device)
                         }
                     } else {
-                        Log.d(
-                            TAG,
-                            "Permission denied for device $device"
-                        )
+                        Log.d(TAG, "Permission denied for device $device")
                         updateStatus("USB Permission denied")
                     }
                 }
             } else if (UsbManager.ACTION_USB_DEVICE_ATTACHED == action) {
-                val device = intent.getParcelableExtra<UsbDevice>(UsbManager.EXTRA_DEVICE)
-                requestPermission(device)
-                updateStatus("USB Device attached")
+                // Updated way to get Parcelable extras
+                val device = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                    intent.getParcelableExtra(UsbManager.EXTRA_DEVICE, UsbDevice::class.java)
+                } else {
+                    @Suppress("DEPRECATION")
+                    intent.getParcelableExtra(UsbManager.EXTRA_DEVICE) as UsbDevice?
+                }
+
+                if (device != null) {
+                    Log.d(TAG, "Device attached: ${device.deviceName}, vendorId: ${device.vendorId}, productId: ${device.productId}")
+                    requestPermission(device)
+                    updateStatus("USB Device attached: ${device.deviceName}")
+                }
             } else if (UsbManager.ACTION_USB_DEVICE_DETACHED == action) {
-                val device = intent.getParcelableExtra<UsbDevice>(UsbManager.EXTRA_DEVICE)
+                // Updated way to get Parcelable extras
+                val device = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                    intent.getParcelableExtra(UsbManager.EXTRA_DEVICE, UsbDevice::class.java)
+                } else {
+                    @Suppress("DEPRECATION")
+                    intent.getParcelableExtra(UsbManager.EXTRA_DEVICE) as UsbDevice?
+                }
+
                 if (device != null && device == usbDevice) {
+                    Log.d(TAG, "Device detached: ${device.deviceName}")
                     closeConnection()
                 }
                 updateStatus("USB Device detached")
@@ -101,29 +132,69 @@ class UsbSerialActivity : Activity() {
 
     private fun findDevice() {
         // Get list of connected USB devices
-        val deviceList = usbManager!!.deviceList
-        if (deviceList.isEmpty()) {
+        val deviceList = usbManager?.deviceList
+
+        Log.d(TAG, "Found ${deviceList?.size} USB devices")
+
+        if (deviceList?.isEmpty() == true) {
             updateStatus("No USB devices found")
             return
         }
 
+        // Log all devices to help with debugging
+        deviceList?.values?.forEach { device ->
+            Log.d(TAG, "Device: ${device.deviceName}, " +
+                    "VendorId: ${device.vendorId} (0x${device.vendorId.toString(16)}), " +
+                    "ProductId: ${device.productId} (0x${device.productId.toString(16)}), " +
+                    "Class: ${device.deviceClass}, " +
+                    "Protocol: ${device.deviceProtocol}")
+        }
 
-        // For simplicity, use the first device found
-        // In a real app, you might want to filter by vendor/product ID
-        usbDevice = deviceList.values.iterator().next()
-        updateStatus("Found device: " + usbDevice!!.deviceName)
+        // Try to find Raspberry Pi Pico specifically (vendor ID: 11914 or 0x2E8A)
+        val picoDevice = deviceList?.values?.find { it.vendorId == 11914 }
 
-
-        // Request permission for the device
-        requestPermission(usbDevice)
+        if (picoDevice != null) {
+            usbDevice = picoDevice
+            Log.d(TAG, "Found Raspberry Pi Pico: ${picoDevice.deviceName}")
+            updateStatus("Found Raspberry Pi Pico")
+            requestPermission(picoDevice)
+        } else {
+            // If no Pico found, use first device (for testing)
+            usbDevice = deviceList?.values?.iterator()?.next()
+            Log.d(TAG, "No Pico found, using: ${usbDevice?.deviceName}")
+            updateStatus("Found device: ${usbDevice?.deviceName}")
+            requestPermission(usbDevice)
+        }
     }
 
     private fun requestPermission(device: UsbDevice?) {
         if (device != null) {
+            Log.d(TAG, "Requesting permission for device: ${device.deviceName}, vendorId: ${device.vendorId}, productId: ${device.productId}")
+
+            // Make sure we have the correct flag for Android 12+ (PendingIntent.FLAG_IMMUTABLE)
+            val flags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                PendingIntent.FLAG_IMMUTABLE
+            } else {
+                0
+            }
+
             val permissionIntent = PendingIntent.getBroadcast(
-                this, 0, Intent(ACTION_USB_PERMISSION), PendingIntent.FLAG_IMMUTABLE
+                this,
+                0,
+                Intent(ACTION_USB_PERMISSION),
+                flags
             )
-            usbManager!!.requestPermission(device, permissionIntent)
+
+            // Check if we already have permission
+            if (usbManager!!.hasPermission(device)) {
+                Log.d(TAG, "Already have permission for device ${device.deviceName}")
+                connectToDevice(device)
+            } else {
+                Log.d(TAG, "Requesting permission via intent for device ${device.deviceName}")
+                usbManager!!.requestPermission(device, permissionIntent)
+            }
+        } else {
+            Log.e(TAG, "Cannot request permission for null device")
         }
     }
 
