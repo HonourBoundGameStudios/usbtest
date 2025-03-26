@@ -14,6 +14,9 @@
     <!-- Example: Accept all devices with the USB CDC class -->
     <usb-device class="2" /> <!-- Communication Device Class -->
 
+    <!-- Raspberry Pi Pico (RP2040) -->
+    <usb-device vendor-id="11914" /> <!-- 0x2E8A in hex -->
+
     <!-- Example: Specific USB-to-Serial adapters by vendor ID -->
     <!-- FTDI -->
     <usb-device vendor-id="1027" />
