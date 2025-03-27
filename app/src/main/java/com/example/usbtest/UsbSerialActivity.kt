@@ -5,8 +5,11 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.hardware.usb.UsbConstants
 import android.hardware.usb.UsbDevice
 import android.hardware.usb.UsbDeviceConnection
+import android.hardware.usb.UsbEndpoint
+import android.hardware.usb.UsbInterface
 import android.hardware.usb.UsbManager
 import android.os.Build
 import android.os.Bundle
@@ -26,6 +29,12 @@ class UsbSerialActivity : Activity() {
     private var usbDevice: UsbDevice? = null
     private var connection: UsbDeviceConnection? = null
     private var statusTextView: TextView? = null
+    private var textSent: TextView? = null
+    private var textReceived: TextView? = null
+    private var outEndpoint: UsbEndpoint? = null
+    private var inEndpoint: UsbEndpoint? = null
+    private var controlEndpoint: UsbEndpoint? = null
+    private var usbInterface: UsbInterface? = null
 
     private val usbReceiver: BroadcastReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
@@ -92,6 +101,8 @@ class UsbSerialActivity : Activity() {
         setContentView(R.layout.activity_usb_serial)
 
         statusTextView = findViewById(R.id.status_text);
+        textSent = findViewById(R.id.text_sent);
+        textReceived = findViewById(R.id.text_received);
         val connectButton = findViewById<Button>(R.id.connect_button);
         val sendButton = findViewById<Button>(R.id.send_button);
 
@@ -115,7 +126,8 @@ class UsbSerialActivity : Activity() {
         // Send data button click listener
         sendButton.setOnClickListener { v: View? ->
             if (connection != null) {
-                sendData("Hello from Android!\n")
+//                sendData("Hello from Android!\n")
+                sendData("r!\n")
             } else {
                 Toast.makeText(
                     this,
@@ -200,114 +212,286 @@ class UsbSerialActivity : Activity() {
         }
     }
 
+    private fun findInterfaceAndEndpoints(device: UsbDevice) {
+        // For debugging, log all interfaces and endpoints
+        for (i in 0 until device.interfaceCount) {
+            val usbIface = device.getInterface(i)
+            Log.d(TAG, "Interface $i: class=${usbIface.interfaceClass}, " +
+                    "subclass=${usbIface.interfaceSubclass}, protocol=${usbIface.interfaceProtocol}")
+
+            for (j in 0 until usbIface.endpointCount) {
+                val endpoint = usbIface.getEndpoint(j)
+                val direction = if (endpoint.direction == UsbConstants.USB_DIR_OUT) "OUT" else "IN"
+                val type = when (endpoint.type) {
+                    UsbConstants.USB_ENDPOINT_XFER_CONTROL -> "CONTROL"
+                    UsbConstants.USB_ENDPOINT_XFER_BULK -> "BULK"
+                    UsbConstants.USB_ENDPOINT_XFER_INT -> "INTERRUPT"
+                    UsbConstants.USB_ENDPOINT_XFER_ISOC -> "ISOCHRONOUS"
+                    else -> "UNKNOWN"
+                }
+                Log.d(TAG, "  Endpoint $j: address=0x${endpoint.address.toString(16)}, " +
+                        "direction=$direction, type=$type")
+            }
+        }
+
+        // First, try to find a CDC interface (Communication Device Class)
+        // CDC typically has class=2 for the control interface and class=10 for data
+        var cdcControlInterface: UsbInterface? = null
+        var cdcDataInterface: UsbInterface? = null
+
+        for (i in 0 until device.interfaceCount) {
+            val usbIface = device.getInterface(i)
+
+            // CDC Control Interface
+            if (usbIface.interfaceClass == UsbConstants.USB_CLASS_COMM) {
+                cdcControlInterface = usbIface
+            }
+            // CDC Data Interface
+            else if (usbIface.interfaceClass == UsbConstants.USB_CLASS_CDC_DATA) {
+                cdcDataInterface = usbIface
+            }
+        }
+
+        // If we found a CDC data interface, use it
+        if (cdcDataInterface != null) {
+            Log.d(TAG, "Found CDC Data Interface")
+            usbInterface = cdcDataInterface
+
+            // Find IN and OUT endpoints
+            for (i in 0 until cdcDataInterface.endpointCount) {
+                val endpoint = cdcDataInterface.getEndpoint(i)
+                if (endpoint.type == UsbConstants.USB_ENDPOINT_XFER_BULK) {
+                    if (endpoint.direction == UsbConstants.USB_DIR_OUT) {
+                        outEndpoint = endpoint
+                        Log.d(TAG, "Found bulk OUT endpoint: ${endpoint.address}")
+                    } else if (endpoint.direction == UsbConstants.USB_DIR_IN) {
+                        inEndpoint = endpoint
+                        Log.d(TAG, "Found bulk IN endpoint: ${endpoint.address}")
+                    }
+                }
+            }
+
+            // If we have a control interface, find its control endpoint
+            if (cdcControlInterface != null) {
+                for (i in 0 until cdcControlInterface.endpointCount) {
+                    val endpoint = cdcControlInterface.getEndpoint(i)
+                    if (endpoint.type == UsbConstants.USB_ENDPOINT_XFER_INT) {
+                        controlEndpoint = endpoint
+                        Log.d(TAG, "Found interrupt control endpoint: ${endpoint.address}")
+                        break
+                    }
+                }
+            }
+        }
+        // If no CDC interface, try to find any interface with bulk endpoints
+        else {
+            Log.d(TAG, "No CDC interface found, looking for bulk endpoints")
+            for (i in 0 until device.interfaceCount) {
+                val usbIface = device.getInterface(i)
+                var foundOut = false
+                var foundIn = false
+
+                for (j in 0 until usbIface.endpointCount) {
+                    val endpoint = usbIface.getEndpoint(j)
+
+                    if (endpoint.type == UsbConstants.USB_ENDPOINT_XFER_BULK) {
+                        if (endpoint.direction == UsbConstants.USB_DIR_OUT) {
+                            outEndpoint = endpoint
+                            foundOut = true
+                            Log.d(TAG, "Found bulk OUT endpoint: ${endpoint.address}")
+                        } else if (endpoint.direction == UsbConstants.USB_DIR_IN) {
+                            inEndpoint = endpoint
+                            foundIn = true
+                            Log.d(TAG, "Found bulk IN endpoint: ${endpoint.address}")
+                        }
+                    }
+                }
+
+                if (foundOut && foundIn) {
+                    usbInterface = usbIface
+                    Log.d(TAG, "Using interface ${usbIface.id} for communication")
+                    break
+                }
+            }
+        }
+
+        if (usbInterface == null) {
+            Log.e(TAG, "No suitable interface with bulk endpoints found")
+        }
+    }
+
+    private fun setupCdcDevice() {
+        // This is only needed for CDC ACM devices
+        // If it's not a CDC device, this won't hurt but also won't help
+        try {
+            // Set line coding - 9600 baud, 8 data bits, no parity, 1 stop bit
+            val lineCoding = byteArrayOf(
+                0x00, 0x26, 0x00, 0x00,  // 9600 baud rate (little-endian)
+                0x00,                    // 1 stop bit
+                0x00,                    // No parity
+                0x08                     // 8 data bits
+            )
+
+            // CDC SetLineCoding request
+            connection?.controlTransfer(
+                0x21,  // REQUEST_TYPE_CLASS | RECIPIENT_INTERFACE | DIRECTION_OUT
+                0x20,  // SET_LINE_CODING
+                0,     // Value
+                0,     // Index (interface)
+                lineCoding,
+                lineCoding.size,
+                1000   // Timeout
+            )
+
+            // Set control line state (DTR and RTS)
+            connection?.controlTransfer(
+                0x21,  // REQUEST_TYPE_CLASS | RECIPIENT_INTERFACE | DIRECTION_OUT
+                0x22,  // SET_CONTROL_LINE_STATE
+                0x03,  // Value (DTR ON, RTS ON)
+                0,     // Index (interface)
+                null,
+                0,
+                1000   // Timeout
+            )
+
+            Log.d(TAG, "CDC device setup completed")
+        } catch (e: Exception) {
+            Log.e(TAG, "Error setting up CDC device", e)
+        }
+    }
+
     private fun connectToDevice(device: UsbDevice?) {
         if (device != null) {
             // Open a connection to the device
             connection = usbManager!!.openDevice(device)
+
             if (connection != null) {
-                // At this point, you would typically use a USB serial library
-                // to handle specific communication protocols (CDC, FTDI, etc.)
+                Log.d(TAG, "USB Connection established")
 
-                // For demonstration purposes, we'll just show direct endpoint communication
+                // Find and store the interface and endpoints
+                findInterfaceAndEndpoints(device)
 
-                val interfaceCount = device.interfaceCount
-                if (interfaceCount > 0) {
-                    connection!!.claimInterface(device.getInterface(0), true)
-                    updateStatus("Connected to " + device.deviceName)
+                if (usbInterface != null) {
+                    // Claim the interface
+                    val claimed = connection!!.claimInterface(usbInterface, true)
+
+                    if (claimed) {
+                        Log.d(TAG, "Interface claimed successfully")
+
+                        // For CDC devices, we might need to perform control transfer setup
+                        setupCdcDevice()
+
+                        usbDevice = device
+                        updateStatus("Connected to ${device.deviceName}")
+                    } else {
+                        Log.e(TAG, "Failed to claim interface")
+                        updateStatus("Failed to claim interface")
+                        closeConnection()
+                    }
                 } else {
-                    updateStatus("Device has no interfaces")
+                    Log.e(TAG, "No suitable interface found")
+                    updateStatus("No suitable interface found")
                     closeConnection()
                 }
             } else {
+                Log.e(TAG, "Failed to open connection")
                 updateStatus("Failed to open connection")
             }
         }
     }
 
     private fun sendData(data: String) {
-        if (connection != null && usbDevice != null) {
-            try {
-                // Find an output endpoint (for simplicity, we'll use the first output endpoint found)
-                var endpointAddress = -1
-                for (i in 0 until usbDevice!!.interfaceCount) {
-                    for (j in 0 until usbDevice!!.getInterface(i).endpointCount) {
-                        if (usbDevice!!.getInterface(i)
-                                .getEndpoint(j).direction == 0
-                        ) { // OUT direction
-                            endpointAddress = usbDevice!!.getInterface(i).getEndpoint(j).address
-                            break
-                        }
-                    }
-                    if (endpointAddress != -1) break
-                }
+        if (connection == null || usbDevice == null || outEndpoint == null) {
+            Log.e(TAG, "Cannot send data - connection not established properly")
+            updateStatus("Cannot send data - not connected")
+            return
+        }
 
-                if (endpointAddress != -1) {
-                    val bytes = data.toByteArray()
-                    val result = connection!!.bulkTransfer(
-                        usbDevice!!.getInterface(0).getEndpoint(0),  // Use first endpoint
-                        bytes,
-                        bytes.size,
-                        1000
-                    ) // Timeout in ms
+        try {
+            val bytes = data.toByteArray()
+            textSent?.text = data  // Update UI
 
-                    if (result >= 0) {
-                        updateStatus("Sent $result bytes")
-                    } else {
-                        updateStatus("Send failed")
-                    }
-                } else {
-                    updateStatus("No output endpoint found")
-                }
-            } catch (e: Exception) {
-                updateStatus("Error: " + e.message)
-                Log.e(TAG, "Error sending data", e)
+            Log.d(TAG, "Sending ${bytes.size} bytes to endpoint 0x${outEndpoint?.address?.toString(16)}")
+
+            // Use the actual OUT endpoint we found during connection
+            val result = connection!!.bulkTransfer(
+                outEndpoint,
+                bytes,
+                bytes.size,
+                1000  // Timeout in ms
+            )
+
+            if (result >= 0) {
+                Log.d(TAG, "Successfully sent $result bytes")
+                updateStatus("Sent $result bytes")
+
+                // After sending, we might want to read the response
+                readResponse()
+            } else {
+                Log.e(TAG, "Send failed with result $result")
+                updateStatus("Send failed with code $result")
             }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error sending data", e)
+            updateStatus("Error: ${e.message}")
         }
     }
 
-    private fun readData(): ByteBuffer? {
-        if (connection != null && usbDevice != null) {
-            // Find an input endpoint
-            var endpointAddress = -1
-            for (i in 0 until usbDevice!!.interfaceCount) {
-                for (j in 0 until usbDevice!!.getInterface(i).endpointCount) {
-                    if (usbDevice!!.getInterface(i).getEndpoint(j).direction == 1) { // IN direction
-                        endpointAddress = usbDevice!!.getInterface(i).getEndpoint(j).address
-                        break
-                    }
-                }
-                if (endpointAddress != -1) break
-            }
-
-            if (endpointAddress != -1) {
-                val buffer = ByteBuffer.allocate(1024) // Buffer size
-                val bytesRead = connection!!.bulkTransfer(
-                    usbDevice!!.getInterface(0)
-                        .getEndpoint(1),  // Assuming the second endpoint is for reading
-                    buffer.array(),
-                    buffer.capacity(),
-                    1000
-                ) // Timeout in ms
-
-                if (bytesRead > 0) {
-                    buffer.position(bytesRead)
-                    buffer.flip()
-                    return buffer
-                }
-            }
-
-            return null
+    private fun readResponse() {
+        if (connection == null || usbDevice == null || inEndpoint == null) {
+            Log.e(TAG, "Cannot read data - connection not established properly")
+            return
         }
-        return null
+
+        try {
+            val buffer = ByteArray(64)  // Buffer size
+
+            Log.d(TAG, "Reading from endpoint 0x${inEndpoint?.address?.toString(16)}")
+
+            val bytesRead = connection!!.bulkTransfer(
+                inEndpoint,
+                buffer,
+                buffer.size,
+                1000  // Timeout in ms
+            )
+
+            if (bytesRead > 0) {
+                val response = String(buffer, 0, bytesRead)
+                Log.d(TAG, "Received response: $response")
+                updateStatus("Received: $response")
+                textReceived?.text = response  // Assuming you have a TextView for received data
+            } else if (bytesRead == 0) {
+                Log.d(TAG, "No data received")
+            } else {
+                Log.e(TAG, "Read failed with result $bytesRead")
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error reading data", e)
+        }
     }
 
     private fun closeConnection() {
-        if (connection != null) {
-            connection!!.close()
+        try {
+            // Release interface if it was claimed
+            if (connection != null && usbInterface != null) {
+                connection!!.releaseInterface(usbInterface)
+            }
+
+            // Close connection
+            if (connection != null) {
+                connection!!.close()
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error closing connection", e)
+        } finally {
             connection = null
+            usbDevice = null
+            usbInterface = null
+            outEndpoint = null
+            inEndpoint = null
+            controlEndpoint = null
+            updateStatus("Disconnected")
         }
-        usbDevice = null
-        updateStatus("Disconnected")
     }
 
     private fun updateStatus(status: String) {

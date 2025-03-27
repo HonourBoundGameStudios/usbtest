@@ -26,4 +26,20 @@
         android:layout_height="wrap_content"
         android:text="Send Test Data" />
 
+    <TextView
+        android:id="@+id/text_sent"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginBottom="16dp"
+        android:text="text sent"
+        android:textSize="18sp" />
+
+    <TextView
+        android:id="@+id/text_received"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginBottom="16dp"
+        android:text="text received"
+        android:textSize="18sp" />
+
 </LinearLayout>
