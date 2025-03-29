@@ -1,4 +1,4 @@
-package com.example.usbtest;
+package com.example.usbtest
 import android.app.Activity
 import android.app.PendingIntent
 import android.content.BroadcastReceiver
@@ -18,7 +18,6 @@ import android.view.View
 import android.widget.Button
 import android.widget.TextView
 import android.widget.Toast
-import java.nio.ByteBuffer
 
 /*!
     https://docs.unity3d.com/2022.3/Documentation/Manual/android-custom-activity.html
@@ -100,11 +99,11 @@ class UsbSerialActivity : Activity() {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_usb_serial)
 
-        statusTextView = findViewById(R.id.status_text);
-        textSent = findViewById(R.id.text_sent);
-        textReceived = findViewById(R.id.text_received);
-        val connectButton = findViewById<Button>(R.id.connect_button);
-        val sendButton = findViewById<Button>(R.id.send_button);
+        statusTextView = findViewById(R.id.status_text)
+        textSent = findViewById(R.id.text_sent)
+        textReceived = findViewById(R.id.text_received)
+        val connectButton = findViewById<Button>(R.id.connect_button)
+        val sendButton = findViewById<Button>(R.id.send_button)
 
 
         // Get USB manager
